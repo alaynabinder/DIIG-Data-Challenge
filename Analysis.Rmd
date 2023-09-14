@@ -29,6 +29,7 @@ library(car) # VIF
 library(MASS) # Backward selection
 library(glmnet) # LASSO regression
 library(caret) # Split test/training
+library(ggcorrplot)
 lifeexp <- read_csv("Life Expectancy Data.csv")
 ```
 
@@ -64,7 +65,7 @@ lifeexp_cor <- lifeexp |>
   dplyr::select(-c(Country, Status))
 
 lifeexp_cor = cor(lifeexp_cor)
-# Correlated variables (>0.90): GDP/expenditure, under-five deaths/infant deaths, thinness 1-19/thinness 5-9
+# Correlated variables (>0.90): GDP/expenditure, under-five deaths/infant deaths, thinness 1-19/thinness 5-9, income composition/schooling
 # Expenditure is used to calculate GDP
 
 # ----------------------------------------------------------------------------
@@ -81,13 +82,13 @@ summary(fit_lifeexp)
 
 # Remove correlated/multicollinear variables
 lifeexp_lm <- lifeexp |>
-  dplyr::select(-c(`infant deaths`, GDP, `thinness  1-19 years`))
+  dplyr::select(-c(`infant deaths`, GDP, `thinness  1-19 years`, `Income composition of resources`))
 
 lifeexp_lm_developing <- lifeexp_developing |>
-  dplyr::select(-c(`infant deaths`, GDP, `thinness  1-19 years`))
+  dplyr::select(-c(`infant deaths`, GDP, `thinness  1-19 years`, `Income composition of resources`))
 
 lifeexp_lm_developed <- lifeexp_developed |>
-  dplyr::select(-c(`infant deaths`, GDP, `thinness  1-19 years`))
+  dplyr::select(-c(`infant deaths`, GDP, `thinness  1-19 years`, `Income composition of resources`))
 ```
 
 ``` {r data-exploration, echo = FALSE}
@@ -117,7 +118,7 @@ glimpse(lifeexp)
 * Income Composition: Human Development Index in terms of income composition of resources (index ranging from 0 to 1.)
 * Schooling: Number of years of schooling.
 
-`infant deaths`, `GDP`, and `thinness  1-19 years` were removed from the data set because they resulted in multicollinearity/were highly correlated with `under-five deaths` (0.997), `percentage expenditure` (0.960), and `thinness 5-9 years` (0.928), respectively.
+`infant deaths`, `GDP`, and `thinness  1-19 years` were removed from the data set because they resulted in multicollinearity/were highly correlated with `under-five deaths` (0.997), `percentage expenditure` (0.960), and `thinness 5-9 years` (0.928), respectively. `Income composition of resources` was also removed due to a correlation greater than 0.70. This was chosen over `Schooling` because years of schooling is a more specific item the WHO can target.
 
 ### Missing Data
 
@@ -125,7 +126,7 @@ In practice, we want to avoid using variables that have more than 10% missingnes
 
 ## Exploratory Data Analysis
 
-```{r developed-vs-developing, echo = FALSE}
+```{r developed-vs-developing, echo = FALSE, results = 'hide'}
 lifeexp_bar <- lifeexp |>
   mutate(Status = case_when(Status == 0 ~ 'Developing',
                             Status == 1 ~ 'Developed'))
@@ -166,6 +167,183 @@ ggplot(lifeexp, aes(x = Population, y = `Life expectancy`)) +
 # There is no pattern of association between population and life expectancy
 ```
 
+```{r disease-scatterplot, echo = FALSE, results = 'hide'}
+data_to_plot <- data.frame(
+  LifeExpectancy = lifeexp_lm_developing$`Life expectancy`,
+  Measles = lifeexp_lm_developing$Measles,
+  HIV_AIDS = lifeexp_lm_developing$`HIV/AIDS`,
+  Diphtheria = lifeexp_lm_developing$Diphtheria,
+  HepatitisB = lifeexp_lm_developing$`Hepatitis B`,
+  Polio = lifeexp_lm_developing$Polio
+)
+
+# Create a scatterplot matrix with all variables
+scatter_matrix <- ggplot(data_to_plot, aes(y = LifeExpectancy)) +
+  geom_point(aes(x = Measles), color = "red") +
+  geom_point(aes(x = HIV_AIDS), color = "blue") +
+  geom_point(aes(x = Diphtheria), color = "green") +
+  geom_point(aes(x = HepatitisB), color = "purple") +
+  geom_point(aes(x = Polio), color = "orange") +
+  labs(x = "Disease Variables", y = "Life Expectancy") +
+  ggtitle("Scatterplot Matrix: Life Expectancy vs. Diseases")
+
+# Print the scatterplot matrix
+print(scatter_matrix)
+```
+
+```{r disease-corrplot, echo = FALSE}
+lifeexp_cor_developing <- lifeexp_lm_developing |>
+  dplyr::select(c(`Hepatitis B`, `HIV/AIDS`, Measles, Polio, Diphtheria))
+
+lifeexp_cor_developing = cor(lifeexp_cor_developing)
+
+ggcorrplot(lifeexp_cor_developing, hc.order = TRUE, type = 'lower')
+```
+
+Explains why initial disease scatter plot is not an informative visual.
+
+```{r disease-scatterplot2, echo = FALSE}
+lifeexp_disease_scatter <- lifeexp_lm |>
+  mutate(Status = case_when(Status == 0 ~ 'Developing',
+                            Status == 1 ~ 'Developed'))
+
+sp <- ggplot(lifeexp_disease_scatter,
+       aes(x = `HIV/AIDS`, y = `Life expectancy`, color = Status)) +
+  geom_point() +
+  labs(x = "HIV/AIDS Deaths (per 1000 Live Births)",
+       y = "Life Expectancy",
+       title = "HIV/AIDS vs. Life Expectancy") +
+  guides(color = guide_legend(reverse=TRUE))
+
+sp + scale_color_manual(values = c("steelblue2", "indianred2"))
+```
+
+```{r thinness-scatterplot, echo = FALSE}
+lifeexp_thinness_scatter <- lifeexp_lm |>
+  mutate(Status = case_when(Status == 0 ~ 'Developing',
+                            Status == 1 ~ 'Developed'))
+
+sp2 <- ggplot(lifeexp_thinness_scatter,
+       aes(x = `thinness 5-9 years`, y = `Life expectancy`, color = Status)) +
+  geom_point() +
+  xlim(0, 23) + # Remove outliers
+  labs(x = "Thinness 5-9 Years",
+       y = "Life Expectancy",
+       title = "Thinness 5-9 Years vs. Life Expectancy") +
+  guides(color = guide_legend(reverse=TRUE)) +
+  theme(legend.position = "bottom")
+
+sp2 + scale_color_manual(values = c("steelblue2", "indianred2"))
+```
+
+```{r alcohol-scatterplot, echo = FALSE, results = 'hide'}
+lifeexp_alcohol_scatter <- lifeexp_lm |>
+  mutate(Status = case_when(Status == 0 ~ 'Developing',
+                            Status == 1 ~ 'Developed'))
+
+sp3 <- ggplot(lifeexp_alcohol_scatter,
+       aes(x = Alcohol, y = `Life expectancy`, color = Status)) +
+  geom_point() +
+  labs(x = "Alcohol Consumption (in liters of pure alcohol)",
+       y = "Life Expectancy",
+       title = "Alcohol Consumption vs. Life Expectancy") +
+  guides(color = guide_legend(reverse=TRUE)) +
+  theme(legend.position = "bottom")
+
+sp3 + scale_color_manual(values = c("steelblue2", "indianred2"))
+```
+
+```{r immunization-vs-death, echo = FALSE, results = 'hide'}
+lifeexp_alcohol_scatter <- lifeexp_lm |>
+  mutate(Status = case_when(Status == 0 ~ 'Developing',
+                            Status == 1 ~ 'Developed'))
+
+sp4 <- ggplot(lifeexp_alcohol_scatter,
+       aes(x = `Hepatitis B`, y = `under-five deaths`, color = Status)) +
+  geom_point() +
+  labs(x = "Hepatitis B Immunization Coverage",
+       y = "Under-five Deaths",
+       title = "Hepatitis B Immunization Coverage vs. Under-five Deaths") +
+  guides(color = guide_legend(reverse=TRUE)) 
+
+sp4 + scale_color_manual(values = c("steelblue2", "indianred2"))
+```
+
+```{r schooling-viz, echo = FALSE, results = 'hide'}
+lifeexp_school_scatter <- lifeexp_lm |>
+  mutate(Status = case_when(Status == 0 ~ 'Developing',
+                            Status == 1 ~ 'Developed'))
+
+sp5 <- ggplot(lifeexp_school_scatter,
+       aes(x = Schooling, y = `percentage expenditure`, color = Status)) +
+  geom_point() +
+  labs(x = "Years of Schooling",
+       y = "Percentage Expenditure\non Health (as a % of GDP)",
+       title = "Years of Schooling vs. Percentage Expenditure") +
+  guides(color = guide_legend(reverse=TRUE))
+
+sp5 + scale_color_manual(values = c("steelblue2", "indianred2"))
+
+# ----------------------------------------------------------------------------
+
+sp6 <- ggplot(lifeexp_school_scatter,
+       aes(x = Schooling, fill = Status)) +
+  geom_density(aes(color = Status), alpha = 0.5) +  # Use color aesthetic
+  labs(x = "Years of Schooling",
+       y = "Density",
+       title = "Density Distribution of Years of Schooling") +
+  guides(fill = guide_legend(reverse = TRUE)) + 
+  scale_fill_manual(values = c("Developing" = "indianred2", "Developed" = "steelblue2")) +
+  scale_color_manual(values = c("Developing" = "indianred2", "Developed" = "steelblue2")) +
+  guides(color = FALSE)
+
+sp6
+
+# ----------------------------------------------------------------------------
+
+sp7 <- ggplot(lifeexp_school_scatter,
+       aes(x = Schooling, y = `Life expectancy`, color = Status)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "slateblue4") +
+  labs(x = "Years of Schooling",
+       y = "Life Expectancy",
+       title = "Years of Schooling vs. Life Expectancy") +
+  guides(color = guide_legend(reverse=TRUE))
+
+sp7 + scale_color_manual(values = c("steelblue2", "indianred2"))
+```
+
+```{r thinness-viz}
+
+sp8 <- ggplot(lifeexp_school_scatter,
+       aes(x = `thinness 5-9 years`, fill = Status)) +
+  geom_density(aes(color = Status), alpha = 0.5) +  # Use color aesthetic
+  labs(x = "Prevalence of Thinness from 5-9 Years",
+       y = "Density",
+       title = "Density Distribution of Thinness Prevalence") +
+  guides(fill = guide_legend(reverse = TRUE)) + 
+  scale_fill_manual(values = c("Developing" = "indianred2", "Developed" = "steelblue2")) +
+  scale_color_manual(values = c("Developing" = "indianred2", "Developed" = "steelblue2")) +
+  guides(color = FALSE)
+
+sp8
+
+# ----------------------------------------------------------------------------
+
+sp9 <- ggplot(lifeexp_school_scatter,
+       aes(x = `thinness 5-9 years`, y = `Adult Mortality`, color = Status)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "slateblue4") +
+  labs(x = "Prevalence of Thinness",
+       y = "Adult Mortality",
+       title = "Prevalence of Thinness vs. Adult Mortality") +
+  guides(color = guide_legend(reverse=TRUE))
+
+sp9 + scale_color_manual(values = c("steelblue2", "indianred2"))
+```
+
+```
+
 ## Model Selection
 
 ```{r forward-selection, echo = FALSE}
@@ -187,8 +365,7 @@ ffit.lifeexp <- stats::step(start.mod,
 summary(ffit.lifeexp)
 # lm(formula = `Life expectancy` ~ Country + Year + `HIV/AIDS` + 
 #     Schooling + `thinness 5-9 years` + Alcohol + `Hepatitis B` + 
-#     `Income composition of resources` + `under-five deaths`, 
-#     data = lifeexp_lm)
+#     `under-five deaths`, data = lifeexp_lm)
 
 # ----------------------------------------------------------------------------
 
@@ -206,8 +383,8 @@ ffit.lifeexp.developing <- stats::step(start.mod.developing,
 
 summary(ffit.lifeexp.developing)
 # lm(formula = `Life expectancy` ~ Country + Year + `HIV/AIDS` + 
-#     Schooling + Alcohol + `thinness 5-9 years` + `Income composition of resources` + 
-#     `under-five deaths` + `Adult Mortality`, data = lifeexp_lm_developing)
+#     Schooling + Alcohol + `thinness 5-9 years` + `under-five deaths` + 
+#     `Adult Mortality`, data = lifeexp_lm_developing)
 
 # ----------------------------------------------------------------------------
 
@@ -238,8 +415,7 @@ bfit.lifeexp <- back.mod |>
 
 summary(bfit.lifeexp)
 # lm(formula = `Life expectancy` ~ Country + Year + Alcohol + `Hepatitis
-#     B` + `under-five deaths` + `HIV/AIDS` + `thinness 5-9 years` + 
-#     `Income composition of resources` + Schooling, data = lifeexp_lm)
+#     B` + `under-five deaths` + `HIV/AIDS` + `thinness 5-9 years` + Schooling, data = lifeexp_lm)
 
 # ----------------------------------------------------------------------------
 
@@ -250,8 +426,7 @@ bfit.lifeexp.developing <- back.mod.developing |>
 
 summary(bfit.lifeexp.developing)
 # lm(formula = `Life expectancy` ~ Country + Year + `Adult Mortality` + 
-#     Alcohol + `under-five deaths` + `HIV/AIDS` + `thinness 5-9 years` + 
-#     `Income composition of resources` + Schooling, data = lifeexp_lm_developing)
+#     Alcohol + `under-five deaths` + `HIV/AIDS` + `thinness 5-9 years` + Schooling, data = lifeexp_lm_developing)
 
 # ----------------------------------------------------------------------------
 
@@ -275,8 +450,7 @@ step.model <- stepAIC(stepwise.mod, direction = "both",
 
 summary(step.model)
 # lm(formula = `Life expectancy` ~ Country + Year + Alcohol + `Hepatitis B` + 
-#     `under-five deaths` + `HIV/AIDS` + `thinness 5-9 years` + 
-#     `Income composition of resources` + Schooling, data = lifeexp_lm)
+#     `under-five deaths` + `HIV/AIDS` + `thinness 5-9 years` + Schooling, data = lifeexp_lm)
 
 # ----------------------------------------------------------------------------
 
@@ -287,8 +461,7 @@ step.model.developing <- stepAIC(stepwise.mod.developing, direction = "both",
 
 summary(step.model.developing)
 # lm(formula = `Life expectancy` ~ Country + Year + `Adult Mortality` + 
-#     Alcohol + `under-five deaths` + `HIV/AIDS` + `thinness 5-9 years` + 
-#     `Income composition of resources` + Schooling, data = lifeexp_lm_developing)
+#     Alcohol + `under-five deaths` + `HIV/AIDS` + `thinness 5-9 years` + Schooling, data = lifeexp_lm_developing)
 
 # ----------------------------------------------------------------------------
 
@@ -302,7 +475,7 @@ summary(step.model.developed)
 #     data = lifeexp_lm_developed)
 ```
 
-General model: all three selection models (forward, backward, both) output the same variables, except for forward selection, which doesn't include `Schooling`.
+General model: all three selection models (forward, backward, both) output the same variables.
 
 Notable variation between developing and developed subsets, but all selected variables for the developing subset were the same.
 
@@ -356,9 +529,10 @@ dim(lifeexp_test)
 # Specify model
 fit_train <- lm(`Life expectancy` ~  Country + Year + `Adult Mortality`
                 + Alcohol + `Hepatitis B` + `under-five deaths` + `HIV/AIDS`
-                + `thinness 5-9 years`+ `Income composition of resources`
-                + Schooling,
+                + `thinness 5-9 years`+ Schooling,
                 data = lifeexp_train)
+
+fit_train
 ```
 
 ```{r training, echo = FALSE}
@@ -371,7 +545,7 @@ lifeexp_train_pred
 # Calculate R-squared
 rsquared <- 1 - (sum((lifeexp_train_pred - lifeexp_train$`Life expectancy`)^2) / sum((lifeexp_train$`Life expectancy` - mean(lifeexp_train$`Life expectancy`))^2))
 
-rsquared # 0.9685629
+rsquared # 0.9684521
 
 # Calculate RMSE
 class(lifeexp_train_pred)
@@ -390,7 +564,7 @@ lifeexp_test_pred <- predict(fit_train, lifeexp_test) |>
 # Calculate R-squared
 rsquared_test <- 1 - (sum((lifeexp_test_pred - lifeexp_test$`Life expectancy`)^2) / sum((lifeexp_test$`Life expectancy` - mean(lifeexp_test$`Life expectancy`))^2))
 
-rsquared_test # 0.9629665
+rsquared_test # 0.9626223
 
 # Calculate RMSE
 class(lifeexp_train_pred)
@@ -402,5 +576,5 @@ rmse_value <- sqrt(mean((lifeexp_train_pred_numeric - lifeexp_train$'Life expect
 rmse_value # 0
 ```
 
-The point of performing extensive statistical tests is to ensure that visualizations focus on the most important/useful variables and can be used to uncover patterns that inform actions.
+All to validate that the chosen factors are strong predictors of life expectancy. R-squared and RMSE demonstrate that this is a strong model.
 
