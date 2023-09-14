@@ -1,0 +1,406 @@
+---
+title: "DIIG Data Challenge"
+author: "Alayna Binder"
+date: "2023-09-14"
+output: html_document
+---
+
+## Context
+
+The World Health Organization, as part of a recent initiative to reduce early deaths in developing countries, wants to learn more about what factors have the strongest correlation with life expectancy. Specifically, they would like to confidently fund specific sectors within developing countries that will have the overall greatest impact on improvements in life expectancy. You have been tasked with examining this data to provide guidance for WHO on where you believe they should focus their efforts on.
+
+## Guiding Questions
+
+* Which variables have the strongest positive and negative correlation to high life expectancy?
+* Are there any similarities in variable outcomes based on Developed vs Developing countries?
+* Are there similar trends when considering various columns related to vaccinations vs income/wealth vs deaths?
+* If a disease like Hepatitis B is present at high levels in certain countries, is there correlation with other diseases as well?
+
+_NOTE: Guiding questions are meant to help you get started and brainstorm. You do not need to specifically answer these questions for the presentation. Feel free to explore anything that is of interest to you in the dataset._
+
+```{r load-pkg-data, echo = FALSE}
+#| message: FALSE
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(tidymodels)
+library(naniar) # Missing variable summary
+library(car) # VIF
+library(MASS) # Backward selection
+library(glmnet) # LASSO regression
+library(caret) # Split test/training
+lifeexp <- read_csv("Life Expectancy Data.csv")
+```
+
+## Data
+
+```{r data-processing, echo = FALSE}
+
+lifeexp_developing <- lifeexp |>
+  filter(Status == 'Developing') |>
+  mutate(Status = case_when(Status == 'Developing' ~ 0)) |>
+  na.omit(Population)
+
+# ----------------------------------------------------------------------------
+
+lifeexp_developed <- lifeexp |>
+  filter(Status == 'Developed') |>
+  mutate(Status = case_when(Status == 'Developed' ~ 1)) |>
+  na.omit(Population)
+
+# ----------------------------------------------------------------------------
+
+lifeexp <- lifeexp |>
+  mutate(Status = case_when(Status == 'Developing' ~ 0,
+                               Status == 'Developed' ~ 1)) |>
+  na.omit(Population)
+
+lifeexp$Status = as.factor(lifeexp$Status)
+```
+
+```{r correlation-multicollinearity, echo = FALSE}
+# Correlation matrix to see aliased coefficients
+lifeexp_cor <- lifeexp |>
+  dplyr::select(-c(Country, Status))
+
+lifeexp_cor = cor(lifeexp_cor)
+# Correlated variables (>0.90): GDP/expenditure, under-five deaths/infant deaths, thinness 1-19/thinness 5-9
+# Expenditure is used to calculate GDP
+
+# ----------------------------------------------------------------------------
+
+# Multicollinearity
+lifeexp_mc <- lifeexp |>
+  dplyr::select(-c(Country, `infant deaths`, GDP, `thinness  1-19 years`))
+
+fit_lifeexp <- lm(`Life expectancy` ~ ., data = lifeexp_mc)
+t(t(vif(fit_lifeexp)))
+summary(fit_lifeexp)
+
+# ----------------------------------------------------------------------------
+
+# Remove correlated/multicollinear variables
+lifeexp_lm <- lifeexp |>
+  dplyr::select(-c(`infant deaths`, GDP, `thinness  1-19 years`))
+
+lifeexp_lm_developing <- lifeexp_developing |>
+  dplyr::select(-c(`infant deaths`, GDP, `thinness  1-19 years`))
+
+lifeexp_lm_developed <- lifeexp_developed |>
+  dplyr::select(-c(`infant deaths`, GDP, `thinness  1-19 years`))
+```
+
+``` {r data-exploration, echo = FALSE}
+# Missing variable summary using naniar package
+miss_var_summary(lifeexp)
+miss_var_summary(lifeexp_developing)
+miss_var_summary(lifeexp_developed)
+
+# Glimpse
+glimpse(lifeexp)
+```
+
+### Variables
+
+* Status: Developed or Developing country.
+* Year: There are several data points for many countries so consider various years!
+* Adult Mortality: Probability of dying between 15 - 60 years per 1000 population.
+* Infant Deaths: Number of infant deaths per 1000 population.
+* Alcohol: Alcohol, recorded per capita (15+) consumption (in liters of pure alcohol).
+* Percentage Expenditure: Expenditure on health as a % of GDP.
+* Hepatitis B/Polio/Diphtheria: HepB/Polio/Diphtheria immunization coverage among 1-year-olds.
+* Measles: Number of cases per 1000 population.
+* BMI: Average BMI of the entire population.
+* Total Expenditure: General government expenditure on health as a percentage of total government expenditure.
+* HIV/AIDS: Deaths per 1000 live births HIV/AIDS (0-4 years)
+* Thinness: Prevalence of thinness among children and adolescents for age interval.
+* Income Composition: Human Development Index in terms of income composition of resources (index ranging from 0 to 1.)
+* Schooling: Number of years of schooling.
+
+`infant deaths`, `GDP`, and `thinness  1-19 years` were removed from the data set because they resulted in multicollinearity/were highly correlated with `under-five deaths` (0.997), `percentage expenditure` (0.960), and `thinness 5-9 years` (0.928), respectively.
+
+### Missing Data
+
+In practice, we want to avoid using variables that have more than 10% missingness to avoid bias. In this data set, `Population` (22.2%), `Hepatitis B` (18.8%), and `GDP` (15.2%) all have more than 10% missingness. Data imputation, however, is not appropriate in this scenario because the data is not missing at random. Certain countries have missing data in several variable columns, sometimes over a span of several years, so imputing data may cause misleading results. Since this analysis is focused on reviewing general factors and not specific countries, missing values are dropped. Dropping the NAs in population removes all NAs in the data set.
+
+## Exploratory Data Analysis
+
+```{r developed-vs-developing, echo = FALSE}
+lifeexp_bar <- lifeexp |>
+  mutate(Status = case_when(Status == 0 ~ 'Developing',
+                            Status == 1 ~ 'Developed'))
+
+ggplot(lifeexp_bar, aes(x = Status)) +
+  geom_bar() +
+  labs(x = "Status",
+       y = "Count",
+       title = "Distribution of Status")
+
+# Before dropping NAs of population: 500 developed, 2400 developing
+# After dropping: 250 developed, 1400 developing
+```
+
+```{r density-matrix, echo = FALSE, results = 'hide'}
+lifeexp_density <- lifeexp |>
+  dplyr::select(-c(Country, Status))
+
+# Convert your dataframe to long format for plotting
+lifeexp_long <- lifeexp_density %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "Value")
+
+# Create a matrix of density plots
+ggplot(lifeexp_long, aes(x = Value)) +
+  geom_density(fill = "blue", color = "black") +
+  facet_wrap(~Variable, scales = "free") +
+  theme_minimal() +
+  labs(title = "Matrix of Density Plots")
+```
+
+```{r population-vs-lifeexp, echo = FALSE, warning = FALSE, results = 'hide'}
+ggplot(lifeexp, aes(x = Population, y = `Life expectancy`)) +
+  geom_point() +
+  xlim(0, 260000) + # Remove outliers
+    labs(y = "Life Expectancy", 
+       title = "Population vs. Life Expectancy")
+
+# There is no pattern of association between population and life expectancy
+```
+
+## Model Selection
+
+```{r forward-selection, echo = FALSE}
+# Define starting model
+start.mod <- lm(`Life expectancy` ~ 1 , data = lifeexp_lm)
+
+# Define stopping model 
+stop.mod <- formula(lm(`Life expectancy` ~ ., data = lifeexp_lm))
+
+# Forward selection
+alpha.crit <- 0.2
+ffit.lifeexp <- stats::step(start.mod,
+             scope=stop.mod,
+             direction="forward",
+             test="F",
+             trace = 0,
+             k=qchisq(1-alpha.crit,1))
+
+summary(ffit.lifeexp)
+# lm(formula = `Life expectancy` ~ Country + Year + `HIV/AIDS` + 
+#     Schooling + `thinness 5-9 years` + Alcohol + `Hepatitis B` + 
+#     `Income composition of resources` + `under-five deaths`, 
+#     data = lifeexp_lm)
+
+# ----------------------------------------------------------------------------
+
+start.mod.developing <- lm(`Life expectancy` ~ 1 , data = lifeexp_lm_developing)
+
+stop.mod.developing <- formula(lm(`Life expectancy` ~ ., data = lifeexp_lm_developing))
+
+alpha.crit <- 0.2
+ffit.lifeexp.developing <- stats::step(start.mod.developing,
+             scope=stop.mod.developing,
+             direction="forward",
+             test="F",
+             trace = 0,
+             k=qchisq(1-alpha.crit,1))
+
+summary(ffit.lifeexp.developing)
+# lm(formula = `Life expectancy` ~ Country + Year + `HIV/AIDS` + 
+#     Schooling + Alcohol + `thinness 5-9 years` + `Income composition of resources` + 
+#     `under-five deaths` + `Adult Mortality`, data = lifeexp_lm_developing)
+
+# ----------------------------------------------------------------------------
+
+start.mod.developed <- lm(`Life expectancy` ~ 1 , data = lifeexp_lm_developed)
+
+stop.mod.developed <- formula(lm(`Life expectancy` ~ ., data = lifeexp_lm_developed))
+
+alpha.crit <- 0.2
+ffit.lifeexp.developed <- stats::step(start.mod.developed,
+             scope=stop.mod.developed,
+             direction="forward",
+             test="F",
+             trace = 0,
+             k=qchisq(1-alpha.crit,1))
+
+summary(ffit.lifeexp.developed)
+# lm(formula = `Life expectancy` ~ Country + Year + `thinness 5-9 years` + 
+#     `Adult Mortality`, data = lifeexp_lm_developed)
+```
+
+```{r backward-selection, echo = FALSE}
+# Define model
+back.mod <- lm(`Life expectancy` ~ ., data = lifeexp_lm)
+
+# Backward selection
+bfit.lifeexp <- back.mod |>
+  stepAIC(direction='backward', trace=FALSE)
+
+summary(bfit.lifeexp)
+# lm(formula = `Life expectancy` ~ Country + Year + Alcohol + `Hepatitis
+#     B` + `under-five deaths` + `HIV/AIDS` + `thinness 5-9 years` + 
+#     `Income composition of resources` + Schooling, data = lifeexp_lm)
+
+# ----------------------------------------------------------------------------
+
+back.mod.developing <- lm(`Life expectancy` ~ ., data = lifeexp_lm_developing)
+
+bfit.lifeexp.developing <- back.mod.developing |>
+  stepAIC(direction='backward', trace=FALSE)
+
+summary(bfit.lifeexp.developing)
+# lm(formula = `Life expectancy` ~ Country + Year + `Adult Mortality` + 
+#     Alcohol + `under-five deaths` + `HIV/AIDS` + `thinness 5-9 years` + 
+#     `Income composition of resources` + Schooling, data = lifeexp_lm_developing)
+
+# ----------------------------------------------------------------------------
+
+back.mod.developed <- lm(`Life expectancy` ~ ., data = lifeexp_lm_developed)
+
+bfit.lifeexp.developed <- back.mod.developed |>
+  stepAIC(direction='backward', trace=FALSE)
+
+summary(bfit.lifeexp.developed)
+# lm(formula = `Life expectancy` ~ Country + Year + `thinness 5-9 years`, 
+#     data = lifeexp_lm_developed)
+```
+
+```{r stepwise-selection, echo = FALSE}
+# Fit the full model 
+stepwise.mod <- lm(`Life expectancy` ~., data = lifeexp_lm)
+
+# Stepwise regression
+step.model <- stepAIC(stepwise.mod, direction = "both", 
+                      trace = FALSE)
+
+summary(step.model)
+# lm(formula = `Life expectancy` ~ Country + Year + Alcohol + `Hepatitis B` + 
+#     `under-five deaths` + `HIV/AIDS` + `thinness 5-9 years` + 
+#     `Income composition of resources` + Schooling, data = lifeexp_lm)
+
+# ----------------------------------------------------------------------------
+
+stepwise.mod.developing <- lm(`Life expectancy` ~., data = lifeexp_lm_developing)
+
+step.model.developing <- stepAIC(stepwise.mod.developing, direction = "both", 
+                      trace = FALSE)
+
+summary(step.model.developing)
+# lm(formula = `Life expectancy` ~ Country + Year + `Adult Mortality` + 
+#     Alcohol + `under-five deaths` + `HIV/AIDS` + `thinness 5-9 years` + 
+#     `Income composition of resources` + Schooling, data = lifeexp_lm_developing)
+
+# ----------------------------------------------------------------------------
+
+stepwise.mod.developed <- lm(`Life expectancy` ~., data = lifeexp_lm_developed)
+
+step.model.developed <- stepAIC(stepwise.mod.developed, direction = "both", 
+                      trace = FALSE)
+
+summary(step.model.developed)
+# lm(formula = `Life expectancy` ~ Country + Year + `thinness 5-9 years`, 
+#     data = lifeexp_lm_developed)
+```
+
+General model: all three selection models (forward, backward, both) output the same variables, except for forward selection, which doesn't include `Schooling`.
+
+Notable variation between developing and developed subsets, but all selected variables for the developing subset were the same.
+
+```{r lasso-regression, echo = FALSE, results = 'hide'}
+#| eval: false
+
+lifeexp_lasso <- lifeexp |>
+  dplyr::select(-c(Country, Status))
+
+yy <- lifeexp_lasso[,'Life expectancy']
+xx <- as.matrix(lifeexp_lasso[,c("Year", "Adult Mortality", "Alcohol", "percentage expenditure", "Hepatitis B", "Measles", "BMI", "under-five deaths", "Polio", "Total expenditure", "Diphtheria", "HIV/AIDS", "Population", "thinness 5-9 years", "Income composition of resources", "Schooling")])
+# yy[1:1649]
+head(xx)
+
+yy <- as.numeric(yy$`Life expectancy`)
+class(yy)
+
+fit.lasso <- glmnet(xx, yy, alpha=1, standardize=TRUE)
+plot(fit.lasso, label=TRUE, xvar="lambda")
+title(main = 'LASSO Regression for Life Expectancy', line=3)
+cbind(1:17,colnames(xx))
+
+set.seed(1)
+cv.lasso <- cv.glmnet(xx, yy, alpha=1, standardize=TRUE, nfolds=10)
+plot(cv.lasso)
+cv.lasso$lambda.min; log(cv.lasso$lambda.min)
+
+lasso.coef <- coef(cv.lasso, s=cv.lasso$lambda.min)
+lasso.coef
+as.vector(lasso.coef)
+```
+
+No variables were shrunk to 0 using LASSO regression so it will not be considered in model selection.
+
+## Final Model
+
+```{r split-testing, echo = FALSE}
+set.seed(1)
+
+# Create initial split
+lifeexp_split <- initial_split(lifeexp_lm_developing) # prop = 3/4 by default
+
+# Save training data
+lifeexp_train <- training(lifeexp_split)
+dim(lifeexp_train)
+
+# Save testing data
+lifeexp_test  <- testing(lifeexp_split)
+dim(lifeexp_test)
+
+# Specify model
+fit_train <- lm(`Life expectancy` ~  Country + Year + `Adult Mortality`
+                + Alcohol + `Hepatitis B` + `under-five deaths` + `HIV/AIDS`
+                + `thinness 5-9 years`+ `Income composition of resources`
+                + Schooling,
+                data = lifeexp_train)
+```
+
+```{r training, echo = FALSE}
+# Make predictions for training data
+lifeexp_train_pred <- predict(fit_train, lifeexp_train) |>
+  bind_cols(lifeexp_train |> dplyr::select(`Life expectancy`))
+
+lifeexp_train_pred
+
+# Calculate R-squared
+rsquared <- 1 - (sum((lifeexp_train_pred - lifeexp_train$`Life expectancy`)^2) / sum((lifeexp_train$`Life expectancy` - mean(lifeexp_train$`Life expectancy`))^2))
+
+rsquared # 0.9685629
+
+# Calculate RMSE
+class(lifeexp_train_pred)
+class(lifeexp_train$'Life expectancy')
+
+lifeexp_train_pred_numeric <- as.numeric(lifeexp_train_pred$'Life expectancy')
+rmse_value <- sqrt(mean((lifeexp_train_pred_numeric - lifeexp_train$'Life expectancy')^2))
+
+rmse_value # 0
+```
+
+```{r testing, echo = FALSE}
+lifeexp_test_pred <- predict(fit_train, lifeexp_test) |>
+  bind_cols(lifeexp_test |> dplyr::select(`Life expectancy`))
+
+# Calculate R-squared
+rsquared_test <- 1 - (sum((lifeexp_test_pred - lifeexp_test$`Life expectancy`)^2) / sum((lifeexp_test$`Life expectancy` - mean(lifeexp_test$`Life expectancy`))^2))
+
+rsquared_test # 0.9629665
+
+# Calculate RMSE
+class(lifeexp_train_pred)
+class(lifeexp_train$'Life expectancy')
+
+lifeexp_train_pred_numeric <- as.numeric(lifeexp_train_pred$'Life expectancy')
+rmse_value <- sqrt(mean((lifeexp_train_pred_numeric - lifeexp_train$'Life expectancy')^2))
+
+rmse_value # 0
+```
+
+The point of performing extensive statistical tests is to ensure that visualizations focus on the most important/useful variables and can be used to uncover patterns that inform actions.
+
